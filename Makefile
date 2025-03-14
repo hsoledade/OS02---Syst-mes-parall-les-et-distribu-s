@@ -3,13 +3,20 @@ include inc/Make_linux.inc
 #include inc/Make_msys2.inc
 #include inc/Make_osx.inc
 
+MPICXX = mpic++
+CXX = $(MPICXX)
+
+
 # Definição das flags do compilador
-CXXFLAGS = -std=c++17 -Wall -Iinc
+CXXFLAGS = -std=c++17 -Wall -Iinc -I/usr/lib/x86_64-linux-gnu/openmpi/include/
 ifdef DEBUG
 CXXFLAGS += -g -O0 -fbounds-check -pedantic -D_GLIBCXX_DEBUG -fsanitize=address
 else
 CXXFLAGS += -O3 -march=native
 endif
+
+
+LIBS = -lSDL2 -lmpi
 
 # Diretórios
 SRC_DIR = src
@@ -47,7 +54,7 @@ $(OBJ_DIR)/simulation.o: $(SRC_DIR)/simulation.cpp $(INC_DIR)/model.hpp $(INC_DI
 
 # Linkagem final do executável
 simulation.exe: $(OBJ_FILES)
-	$(CXX) $(CXXFLAGS) $^ -o $@ $(LIB)	
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LIBS)	
 
 # Limpeza dos arquivos gerados
 clean:
