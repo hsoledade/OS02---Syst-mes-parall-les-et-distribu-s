@@ -5,11 +5,13 @@
 #include <thread>
 #include <chrono>
 #include <mpi.h>
-#include <vector>
-#include <algorithm>
 
 #include "model.hpp"
 #include "display.hpp"
+
+
+// Funciones auxiliares: analyze_arg, parse_arguments, check_params y display_params
+// (Se mantienen iguales a tu versión original)
 
 using namespace std::string_literals;
 using namespace std::chrono_literals;
@@ -195,127 +197,99 @@ void display_params(ParamsType const& params)
               << "\tPosition initiale du foyer (col, ligne) : " << params.start.column << ", " << params.start.row << std::endl;
 }
 
-
-int main(int argc, char* argv[]) {
-    MPI_Init(&argc, &argv);
+int main(int nargs, char* args[])
+{
+    MPI_Init(&nargs, &args);
     int rank, size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-    // Parse de parámetros (todos ven el mismo dominio global)
-    auto params = parse_arguments(argc-1, &argv[1]);
+    auto params = parse_arguments(nargs-1, &args[1]);
     display_params(params);
     if (!check_params(params)) {
         MPI_Finalize();
         return EXIT_FAILURE;
     }
-    
-    // Suponemos que el proceso 0 solo visualiza y los trabajadores (ranks 1...size-1) realizan los cálculos.
-    int workerCount = size - 1;
-    if(workerCount < 1) {
-        std::cerr << "Se requieren al menos 2 procesos (1 visualizador + 1 trabajador)." << std::endl;
-        MPI_Finalize();
-        return EXIT_FAILURE;
-    }
-    
-    // Dividir el dominio entre los procesos trabajadores.
-    int rows_per_worker = params.discretization / workerCount;
-    int extra_rows = params.discretization% workerCount;
-    int local_start = 0, local_end = 0;
-    if(rank != 0) {
-        int worker_rank = rank - 1; // trabajadores numerados de 0 a workerCount-1
-        local_start = worker_rank * rows_per_worker + std::min(worker_rank, extra_rows);
-        local_end = local_start + rows_per_worker + (worker_rank < extra_rows ? 1 : 0);
-    }
-    int local_rows = (rank == 0) ? 0 : (local_end - local_start);
-    
-    // Creamos una instancia global del modelo (se asume que la misma configuración se utiliza en todos)
-    Model simu(params.length, params.discretization, params.wind, params.start);
-    
-    // Proceso 0: reserva arreglos globales para visualización.
-    std::vector<std::uint8_t> global_fire, global_vegetal;
+
+    // Calcula las filas asignadas a cada proceso
+    int rows_per_process = params.discretization / size;
+    int extra_rows = params.discretization % size;
+    int start_row = rank * rows_per_process + std::min(rank, extra_rows);
+    int end_row = start_row + rows_per_process + (rank < extra_rows ? 1 : 0);
+
+    // Cada proceso crea su instancia de la simulación
+    auto simu = Model(params.length, params.discretization, params.wind, params.start);
+
+    std::vector<std::uint8_t> global_fire_map(params.discretization * params.discretization, 0);
+    std::vector<std::uint8_t> global_vegetal_map(params.discretization * params.discretization, 255);
+
+
+    // En el maestro (rank 0) se preparan los arreglos para recibir la información de cada proceso
+    std::vector<int> recv_counts, displs;
+    std::shared_ptr<Displayer> displayer;
     if (rank == 0) {
-        global_fire.resize(params.discretization* params.discretization, 0u);
-        global_vegetal.resize(params.discretization * params.discretization, 255u);
-    }
-    
-    // Procesos trabajadores: cada uno reserva arreglos locales extendidos (con celdas fantasma)
-    // Tamaño: (local_rows + 2) x N
-    std::vector<std::uint8_t> local_fire, local_vegetal;
-    if (rank != 0) {
-        int extended_rows = local_rows + 2; // fila 0: halo superior, filas 1..local_rows: datos internos, fila local_rows+1: halo inferior
-        local_fire.resize(extended_rows * params.discretization, 0u);
-        local_vegetal.resize(extended_rows * params.discretization, 255u);
-        // Inicializar la parte interna con el estado inicial extraído de simu
-        for (int r = 0; r < local_rows; r++) {
-            std::copy(simu.fire_map().begin() + (local_start + r) * params.discretization,
-                      simu.fire_map().begin() + (local_start + r + 1) * params.discretization,
-                      local_fire.begin() + (r + 1) * params.discretization);
-            std::copy(simu.vegetal_map().begin() + (local_start + r) * params.discretization,
-                      simu.vegetal_map().begin() + (local_start + r + 1) * params.discretization,
-                      local_vegetal.begin() + (r + 1) * params.discretization);
+        recv_counts.resize(size);
+        displs.resize(size);
+        for (int i = 0; i < size; i++) {
+            int proc_start = i * rows_per_process + std::min(i, extra_rows);
+            int proc_end = proc_start + rows_per_process + (i < extra_rows ? 1 : 0);
+            recv_counts[i] = (proc_end - proc_start) * params.discretization;
+            displs[i] = proc_start * params.discretization;
         }
+        global_fire_map.resize(params.discretization * params.discretization, 0);
+        global_vegetal_map.resize(params.discretization * params.discretization, 255);
+        displayer = Displayer::init_instance(params.discretization, params.discretization);
     }
-    
-    // Bucle principal de simulación
-    bool active = true;
-    while (active) {
-        if (rank != 0) {
-            // 1. Intercambio de halos
-            // Halo superior: si existe (rank > 1)
-            if (rank > 1) {
-                MPI_Sendrecv(local_fire.data() + 1 * params.discretization, params.discretization, MPI_UNSIGNED_CHAR,
-                             rank - 1, 0,
-                             local_fire.data(), params.discretization, MPI_UNSIGNED_CHAR,
-                             rank - 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                MPI_Sendrecv(local_vegetal.data() + 1 * params.discretization, params.discretization, MPI_UNSIGNED_CHAR,
-                             rank - 1, 0,
-                             local_vegetal.data(), params.discretization, MPI_UNSIGNED_CHAR,
-                             rank - 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+    bool local_continue = true;
+    bool global_continue = true;
+    while (global_continue) {
+        // Cada proceso actualiza su parte de la simulación
+        local_continue = simu.update_local(start_row, end_row);
+
+        // Se realiza un Allreduce lógico para determinar si algún proceso sigue activo
+        int local_flag = local_continue ? 1 : 0;
+        int global_flag = 0;
+        MPI_Allreduce(&local_flag, &global_flag, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
+        global_continue = (global_flag != 0);
+
+        // Cada proceso envía únicamente las filas actualizadas de sus mapas usando MPI_Gatherv.
+        int local_size = (end_row - start_row) * params.discretization;
+        MPI_Gatherv(simu.fire_map().data() + start_row * params.discretization,
+                    local_size, MPI_UNSIGNED_CHAR,
+                    rank == 0 ? global_fire_map.data() : nullptr,
+                    rank == 0 ? recv_counts.data() : nullptr,
+                    rank == 0 ? displs.data() : nullptr,
+                    MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
+
+        MPI_Gatherv(simu.vegetal_map().data() + start_row * params.discretization,
+                    local_size, MPI_UNSIGNED_CHAR,
+                    rank == 0 ? global_vegetal_map.data() : nullptr,
+                    rank == 0 ? recv_counts.data() : nullptr,
+                    rank == 0 ? displs.data() : nullptr,
+                    MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
+
+        // El maestro actualiza el display con el mapa global reconstruido
+        if (rank == 0) {
+            displayer->update(global_vegetal_map, global_fire_map);
+            if ((simu.time_step() & 31) == 0)
+                std::cout << "Time step " << simu.time_step() << "\n===============" << std::endl;
+
+            SDL_Event event;
+            if (SDL_PollEvent(&event) && event.type == SDL_QUIT) {
+                global_continue = false;
             }
-            // Halo inferior: si existe (rank < size-1)
-            if (rank < size - 1) {
-                MPI_Sendrecv(local_fire.data() + local_rows * params.discretization, params.discretization, MPI_UNSIGNED_CHAR,
-                             rank + 1, 1,
-                             local_fire.data() + (local_rows + 1) * params.discretization, params.discretization, MPI_UNSIGNED_CHAR,
-                             rank + 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                MPI_Sendrecv(local_vegetal.data() + local_rows * params.discretization, params.discretization, MPI_UNSIGNED_CHAR,
-                             rank + 1, 1,
-                             local_vegetal.data() + (local_rows + 1) * params.discretization, params.discretization, MPI_UNSIGNED_CHAR,
-                             rank + 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            }
-            
-            // 2. Actualización local: se actualiza la parte interna usando la función update_local
-            // Esta función debe estar implementada en Model (como se mostró en el ejemplo anterior)
-            active = simu.update_local(local_fire, local_vegetal, local_rows, params.discretization);
-            
-            // 3. Enviar al proceso 0 las filas internas (excluyendo halos)
-            int count = local_rows * params.discretization;
-            MPI_Send(local_fire.data() + params.discretization, count, MPI_UNSIGNED_CHAR, 0, 0, MPI_COMM_WORLD);
-            MPI_Send(local_vegetal.data() + params.discretization, count, MPI_UNSIGNED_CHAR, 0, 1, MPI_COMM_WORLD);
-        } else {
-            // En el proceso 0: solo se encarga de la visualización
-            // (Podrías también actualizar un estado global, si lo deseas)
-            // Recibir las porciones de cada trabajador
-            for (int i = 1; i < size; i++) {
-                int worker_rank = i - 1;
-                int start_row_i = worker_rank * rows_per_worker + std::min(worker_rank, extra_rows);
-                int end_row_i = start_row_i + rows_per_worker + (worker_rank < extra_rows ? 1 : 0);
-                int count = (end_row_i - start_row_i) * params.discretization;
-                MPI_Recv(global_fire.data() + start_row_i * params.discretization, count,
-                         MPI_UNSIGNED_CHAR, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                MPI_Recv(global_vegetal.data() + start_row_i * params.discretization, count,
-                         MPI_UNSIGNED_CHAR, i, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            }
-            // Actualizar la visualización
-            auto displayer = Displayer::instance();
-            displayer->update(global_vegetal, global_fire);
-            
-            // Opcional: avanzar el estado global (por ejemplo, llamar a simu.update())
-            // simu.update();
         }
+        MPI_Bcast(global_fire_map.data(), global_fire_map.size(), MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
+        MPI_Bcast(global_vegetal_map.data(), global_vegetal_map.size(), MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
+
+        // Cada proceso actualiza su estado local con el estado global recién recibido.
+        std::copy(global_fire_map.begin(), global_fire_map.end(), simu.fire_map().begin());
+        std::copy(global_vegetal_map.begin(), global_vegetal_map.end(), simu.vegetal_map().begin());
+
+        // Se sincronizan todos los procesos antes de la siguiente iteración
         MPI_Barrier(MPI_COMM_WORLD);
-    } // Fin del bucle de simulación
+    }
 
     MPI_Finalize();
     return EXIT_SUCCESS;
