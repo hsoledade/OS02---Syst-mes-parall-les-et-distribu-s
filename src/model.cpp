@@ -1,14 +1,15 @@
 #include <stdexcept>
 #include <cmath>
 #include <iostream>
+#include <fstream>
+#include <unordered_map>
 #include "model.hpp"
-
 
 namespace
 {
     double pseudo_random( std::size_t index, std::size_t time_step )
     {
-        std::uint_fast32_t xi = std::uint_fast32_t(index*(time_step+10000));
+        std::uint_fast32_t xi = std::uint_fast32_t(index*(time_step+1));
         std::uint_fast32_t r  = (48271*xi)%2147483647;
         return r/2147483646.;
     }
@@ -71,111 +72,111 @@ Model::Model( double t_length, unsigned t_discretization, std::array<double,2> t
         alphaSouthNorth = 1. - std::abs(m_wind[1]/t_max_wind);
     }
 }
-// --------------------------------------------------------------------------------------------------------------------
-bool 
-Model::update()
+
+// -----------------------------------------------------------------------------
+// Esta función actualiza el bloque local (incluyendo halos) y retorna true si
+// aún hay fuego activo en el dominio interno.
+bool Model::update_local(std::vector<std::uint8_t>& local_fire,
+                           std::vector<std::uint8_t>& local_vegetal,
+                           int local_rows, int cols)
 {
-    auto next_front = m_fire_front;
-    for (auto f : m_fire_front)
-    {
-        // Récupération de la coordonnée lexicographique de la case en feu :
-        LexicoIndices coord = get_lexicographic_from_index(f.first);
-        // Et de la puissance du foyer
-        double        power = log_factor(f.second);
+    // Creamos una copia para calcular el nuevo estado.
+    std::vector<std::uint8_t> new_fire = local_fire;
+    // Se iteran únicamente las celdas internas: filas 1 .. local_rows
+    for (int i = 1; i <= local_rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            int idx = i * cols + j;
+            // Solo se procesan celdas encendidas
+            if (local_fire[idx] == 0)
+                continue;
+            double power = log_factor(local_fire[idx]);
 
+            // Vecino superior (usa fila 0 si i==1)
+            if (i > 0) {
+                int top_idx = (i - 1) * cols + j;
+                double tirage = pseudo_random(idx + 1, m_time_step);
+                double green_power = local_vegetal[top_idx];
+                double correction = power * log_factor(green_power);
+                if (tirage < alphaSouthNorth * p1 * correction)
+                    new_fire[top_idx] = 255;
+            }
 
-        // On va tester les cases voisines pour contamination par le feu :
-        if (coord.row < m_geometry-1)
-        {
-            double tirage      = pseudo_random( f.first+m_time_step, m_time_step);
-            double green_power = m_vegetation_map[f.first+m_geometry];
-            double correction  = power*log_factor(green_power);
-            if (tirage < alphaSouthNorth*p1*correction)
-            {
-                m_fire_map[f.first + m_geometry]   = 255.;
-                next_front[f.first + m_geometry] = 255.;
+            // Vecino inferior (fila i+1, puede estar en el halo inferior)
+            if (i < local_rows + 1) {
+                int bottom_idx = (i + 1) * cols + j;
+                double tirage = pseudo_random(idx + 2, m_time_step);
+                double green_power = local_vegetal[bottom_idx];
+                double correction = power * log_factor(green_power);
+                if (tirage < alphaNorthSouth * p1 * correction)
+                    new_fire[bottom_idx] = 255;
+            }
+
+            // Vecino izquierdo
+            if (j > 0) {
+                int left_idx = i * cols + (j - 1);
+                double tirage = pseudo_random(idx + 3, m_time_step);
+                double green_power = local_vegetal[left_idx];
+                double correction = power * log_factor(green_power);
+                if (tirage < alphaEastWest * p1 * correction)
+                    new_fire[left_idx] = 255;
+            }
+
+            // Vecino derecho
+            if (j < cols - 1) {
+                int right_idx = i * cols + (j + 1);
+                double tirage = pseudo_random(idx + 4, m_time_step);
+                double green_power = local_vegetal[right_idx];
+                double correction = power * log_factor(green_power);
+                if (tirage < alphaWestEast * p1 * correction)
+                    new_fire[right_idx] = 255;
+            }
+
+            // Decaimiento del fuego
+            if (local_fire[idx] == 255) {
+                double tirage = pseudo_random(idx * 2, m_time_step);
+                if (tirage < p2) {
+                    new_fire[idx] >>= 1;
+                }
+            } else {
+                new_fire[idx] >>= 1;
             }
         }
-
-        if (coord.row > 0)
-        {
-            double tirage      = pseudo_random( f.first*13427+m_time_step, m_time_step);
-            double green_power = m_vegetation_map[f.first - m_geometry];
-            double correction  = power*log_factor(green_power);
-            if (tirage < alphaNorthSouth*p1*correction)
-            {
-                m_fire_map[f.first - m_geometry] = 255.;
-                next_front[f.first - m_geometry] = 255.;
-            }
-        }
-
-        if (coord.column < m_geometry-1)
-        {
-            double tirage      = pseudo_random( f.first*13427*13427+m_time_step, m_time_step);
-            double green_power = m_vegetation_map[f.first+1];
-            double correction  = power*log_factor(green_power);
-            if (tirage < alphaEastWest*p1*correction)
-            {
-                m_fire_map[f.first + 1] = 255.;
-                next_front[f.first + 1] = 255.;
-            }
-        }
-
-        if (coord.column > 0)
-        {
-            double tirage      = pseudo_random( f.first*13427*13427*13427+m_time_step, m_time_step);
-            double green_power = m_vegetation_map[f.first - 1];
-            double correction  = power*log_factor(green_power);
-            if (tirage < alphaWestEast*p1*correction)
-            {
-                m_fire_map[f.first - 1] = 255.;
-                next_front[f.first - 1] = 255.;
-            }
-        }
-        // Si le feu est à son max,
-        if (f.second == 255)
-        {   // On regarde si il commence à faiblir pour s'éteindre au bout d'un moment :
-            double tirage = pseudo_random( f.first * 52513 + m_time_step, m_time_step);
-            if (tirage < p2)
-            {
-                m_fire_map[f.first] >>= 1;
-                next_front[f.first] >>= 1;
-            }
-        }
-        else
-        {
-            // Foyer en train de s'éteindre.
-            m_fire_map[f.first] >>= 1;
-            next_front[f.first] >>= 1;
-            if (next_front[f.first] == 0)
-            {
-                next_front.erase(f.first);
-            }
-        }
-
-    }    
-    // A chaque itération, la végétation à l'endroit d'un foyer diminue
-    m_fire_front = next_front;
-    for (auto f : m_fire_front)
-    {
-        if (m_vegetation_map[f.first] > 0)
-            m_vegetation_map[f.first] -= 1;
     }
-    m_time_step += 1;
-    return !m_fire_front.empty();
+
+    // Reducir la vegetación en las celdas que están en fuego
+    for (int i = 1; i <= local_rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            int idx = i * cols + j;
+            if (new_fire[idx] > 0 && local_vegetal[idx] > 0)
+                local_vegetal[idx]--;
+        }
+    }
+
+    // Actualizar el estado interno y determinar si hay fuego activo
+    bool active = false;
+    for (int i = 1; i <= local_rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            int idx = i * cols + j;
+            local_fire[idx] = new_fire[idx];
+            if (local_fire[idx] > 0)
+                active = true;
+        }
+    }
+    m_time_step++; // incrementar el tiempo global
+    return active;
 }
-// ====================================================================================================================
-std::size_t   
-Model::get_index_from_lexicographic_indices( LexicoIndices t_lexico_indices  ) const
+
+// -----------------------------------------------------------------------------
+// Métodos auxiliares que mapean índices globales (sin celdas fantasma)
+std::size_t Model::get_index_from_lexicographic_indices(LexicoIndices t_lexico_indices) const
 {
-    return t_lexico_indices.row*this->geometry() + t_lexico_indices.column;
+    return t_lexico_indices.row * this->geometry() + t_lexico_indices.column;
 }
-// --------------------------------------------------------------------------------------------------------------------
-auto 
-Model::get_lexicographic_from_index( std::size_t t_global_index ) const -> LexicoIndices
+
+auto Model::get_lexicographic_from_index(std::size_t t_global_index) const -> LexicoIndices
 {
     LexicoIndices ind_coords;
-    ind_coords.row    = t_global_index/this->geometry();
-    ind_coords.column = t_global_index%this->geometry();
+    ind_coords.row = t_global_index / this->geometry();
+    ind_coords.column = t_global_index % this->geometry();
     return ind_coords;
 }
