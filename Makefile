@@ -16,9 +16,12 @@ SRC_DIR = src
 OBJ_DIR = obj
 INC_DIR = inc
 RESULTS_DIR = Resultats
+SEQUENTIEL_DIR = $(RESULTS_DIR)/Sequentiel
+AMDAHL_DIR = $(RESULTS_DIR)/Amdahl
+GUSTAFSON_DIR = $(RESULTS_DIR)/Gustafson
 
-# Criar pasta obj/ e Resultats/ se não existirem
-$(shell mkdir -p $(OBJ_DIR) $(RESULTS_DIR))
+# Criar pastas se não existirem
+$(shell mkdir -p $(OBJ_DIR) $(RESULTS_DIR) $(SEQUENTIEL_DIR) $(AMDAHL_DIR) $(GUSTAFSON_DIR))
 
 # Encontrar todos os arquivos .cpp dentro de SRC_DIR
 SRC_FILES = $(wildcard $(SRC_DIR)/*.cpp)
@@ -51,7 +54,10 @@ simulation.exe: $(OBJ_FILES)
 
 # Limpeza dos arquivos gerados
 clean:
-	@rm -fr $(OBJ_DIR)/*.o $(RESULTS_DIR)/* *.exe *~
+	@rm -fr $(OBJ_DIR)/*.o 
+	@rm -f $(SEQUENTIEL_DIR)/*.csv $(AMDAHL_DIR)/*.csv $(GUSTAFSON_DIR)/*.csv  # Remove arquivos CSV sem deletar as pastas
+	@rm -f $(RESULTS_DIR)/*.txt $(RESULTS_DIR)/*.log # Remove arquivos de texto, logs, mas mantém as pastas
+	@rm -f *.exe *~
 
 # Exibir ajuda
 help:

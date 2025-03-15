@@ -1,0 +1,35 @@
+LISTAR branchs :
+
+    git branch
+
+CRIAR OUTRA Branch :
+
+    git branch <Nome_Branch>
+
+PARA MUDAR DE Branch :
+
+    git checkout <Nome_Branch>
+
+ENVIAR TODAS AS Branches DE UMA VEZ :
+    
+    git push --all origin
+
+ENVIAR SOMENTE 1 Branch :
+    
+    git push origin <Nome_Branch>
+
+MOSTRA TODAS AS Branches INCLUSIVE A QUE VC ESTA :
+
+    git branch --all
+
+PARA ADICIONAR TUDO (INCLUSIVE NOVOS ARQUIVOS) :
+    git add -A  # Adiciona tudo
+
+ADICIONAR SOMENTE ARQUIVOS MODIFICADOS :
+    git add -u  # Apenas arquivos modificados já rastreados
+
+MENSAGEM DO COMMIT :
+    git commit -m "Mensagem do commit"
+
+FAZER O PUSH (ENVIAR PRA O GIT) :
+    git push origin Partie1

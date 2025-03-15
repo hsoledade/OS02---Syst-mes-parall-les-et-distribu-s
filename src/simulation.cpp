@@ -1,9 +1,11 @@
+#include <fstream>  // Para manipular arquivos
 #include <string>
 #include <cstdlib>
 #include <cassert>
 #include <iostream>
 #include <thread>
 #include <chrono>
+#include <ctime>  // Para obter data e hora
 
 #include "model.hpp"
 #include "display.hpp"
@@ -17,6 +19,7 @@ struct ParamsType
     unsigned discretization{20u};
     std::array<double,2> wind{0.,0.};
     Model::LexicoIndices start{10u,10u};
+    unsigned num_threads{1};  // Novo parâmetro para o número de threads
 };
 
 void analyze_arg( int nargs, char* args[], ParamsType& params )
@@ -136,6 +139,30 @@ void analyze_arg( int nargs, char* args[], ParamsType& params )
         analyze_arg(nargs-1, &args[1], params);
         return;
     }
+
+    // =====================
+    // ADICIONADO - PARÂMETRO PARA O NÚMERO DE THREADS
+    // =====================
+    if (key == "-t"s)  // Parâmetro "-t N" para definir o número de threads
+    {
+        if (nargs < 2)
+        {
+            std::cerr << "Manque une valeur pour le nombre de threads !" << std::endl;
+            exit(EXIT_FAILURE);
+        }
+        params.num_threads = std::stoul(args[1]);  // Converte string para número inteiro
+        analyze_arg(nargs - 2, &args[2], params);
+        return;
+    }
+
+    pos = key.find("--threads=");
+    if (pos < key.size())
+    {
+        auto subkey = std::string(key, pos + 10);
+        params.num_threads = std::stoul(subkey);
+        analyze_arg(nargs - 1, &args[1], params);
+        return;
+    }
 }
 
 ParamsType parse_arguments( int nargs, char* args[] )
@@ -151,6 +178,7 @@ R"RAW(Usage : simulation [option(s)]
     -n, --number_of_cases=N     Nombre n de cases par direction pour la discrétisation
     -w, --wind=VX,VY            Définit le vecteur vitesse du vent (pas de vent par défaut).
     -s, --start=COL,ROW         Définit les indices I,J de la case où commence l'incendie (milieu de la carte par défaut)
+    -t, --threads=N             Définit le nombre de threads utilisés pour la simulation.
 )RAW";
         exit(EXIT_SUCCESS);
     }
@@ -179,6 +207,12 @@ bool check_params(ParamsType& params)
         std::cerr << "[ERREUR FATALE] Mauvais indices pour la position initiale du foyer" << std::endl;
         flag = false;
     }
+
+    if (params.num_threads < 1)
+    {
+        std::cerr << "[ERREUR FATALE] Le nombre de threads doit être au moins 1 !" << std::endl;
+        flag = false;
+    }
     
     return flag;
 }
@@ -189,31 +223,88 @@ void display_params(ParamsType const& params)
               << "\tTaille du terrain : " << params.length << std::endl 
               << "\tNombre de cellules par direction : " << params.discretization << std::endl 
               << "\tVecteur vitesse : [" << params.wind[0] << ", " << params.wind[1] << "]" << std::endl
-              << "\tPosition initiale du foyer (col, ligne) : " << params.start.column << ", " << params.start.row << std::endl;
+              << "\tPosition initiale du foyer (col, ligne) : " << params.start.column << ", " << params.start.row << std::endl
+              << "\tNombre de threads utilisés : " << params.num_threads << std::endl;
+}
+
+// Função para obter data e hora formatada para o nome do arquivo
+std::string get_timestamp()
+{
+    auto now = std::chrono::system_clock::now();
+    std::time_t now_time = std::chrono::system_clock::to_time_t(now);
+    std::tm local_time = *std::localtime(&now_time);  // Converter para o horário local
+
+    char buffer[50];
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d_%H-%M-%S", &local_time);  // Formato: YYYY-MM-DD_HH-MM-SS
+    return std::string(buffer);
 }
 
 int main( int nargs, char* args[] )
 {
-    auto params = parse_arguments(nargs-1, &args[1]);
+    // Parsear argumentos
+    auto params = parse_arguments(nargs - 1, &args[1]);
+    
+    // Gerar nome do arquivo CSV com tamanho da grid, número de threads e data/hora
+    std::string filename = "Resultats/Sequentiel/n" + std::to_string(params.discretization) + "_t" + std::to_string(params.num_threads) + "_sequentiel" + ".csv";
+    
+    // Criar arquivo CSV
+    std::ofstream csvFile(filename);
+    
+    // Escrever os parâmetros no início do arquivo CSV
+    csvFile << "Paramètres de la simulation\n";
+    csvFile << "Taille du terrain," << params.length << " km\n";
+    csvFile << "Nombre de cellules par direction," << params.discretization << "\n";
+    csvFile << "Vecteur vitesse du vent," << params.wind[0] << "," << params.wind[1] << "\n";
+    csvFile << "Position initiale du foyer," << params.start.column << "," << params.start.row << "\n";
+    csvFile << "Nombre de threads utilisés," << params.num_threads << "\n\n";
+    
+    // Escrever cabeçalho das medições
+    csvFile << "TimeStep,Time_Avancement,T_Affichage,T_total\n";
+
     display_params(params);
     if (!check_params(params)) return EXIT_FAILURE;
 
-    auto displayer = Displayer::init_instance( params.discretization, params.discretization );
-    auto simu = Model( params.length, params.discretization, params.wind,
-                       params.start);
+    auto displayer = Displayer::init_instance(params.discretization, params.discretization);
+    auto simu = Model(params.length, params.discretization, params.wind, params.start);
+
     SDL_Event event;
-    while (simu.update())
-    {
+    while (true)
+    {   
         while (SDL_PollEvent(&event))
             if (event.type == SDL_QUIT)
                 return EXIT_SUCCESS;
+
         if ((simu.time_step() & 31) == 0) 
             std::cout << "Time step " << simu.time_step() << "\n===============" << std::endl;
-        displayer->update( simu.vegetal_map(), simu.fire_map() );
-        if (SDL_PollEvent(&event) && event.type == SDL_QUIT)
+
+        auto start_total = std::chrono::high_resolution_clock::now();  // Início da simulação
+
+        // Medir tempo de simu.update()
+        auto step_start = std::chrono::high_resolution_clock::now();
+        bool continua = simu.update();
+        auto step_end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> step_time = step_end - step_start;
+
+        if (!continua)  // Se a simulação terminou, saímos do loop
             break;
-        // std::this_thread::sleep_for(0.1s);
+        
+        // Medir tempo de displayer.update()
+        auto step_start_display = std::chrono::high_resolution_clock::now();
+        displayer->update(simu.vegetal_map(), simu.fire_map());
+        auto step_end_display = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> step_time_display = step_end_display - step_start_display; 
+
+        // Medir o tempo total
+        auto end_total = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> total_time = end_total - start_total;
+
+        // Salvar os tempos no arquivo CSV
+        csvFile << simu.time_step() << "," << step_time.count() << "," << step_time_display.count() << "," << total_time.count() << "\n";
     }
+
+    // Fechar o arquivo CSV
+    csvFile.close();
+
     return EXIT_SUCCESS;
 }
 
