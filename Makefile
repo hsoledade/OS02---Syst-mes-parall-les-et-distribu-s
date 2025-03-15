@@ -58,7 +58,7 @@ simulation.exe: $(OBJ_FILES)
 
 # Limpeza dos arquivos gerados
 clean:
-	@rm -fr $(OBJ_DIR)/*.o $(RESULTS_DIR)/* *.exe *~
+	@rm -fr $(OBJ_DIR)/*.o $(RESULTS_DIR)/* *.exe *~ *.txt
 
 # Exibir ajuda
 help:
