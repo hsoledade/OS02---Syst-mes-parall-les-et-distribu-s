@@ -166,19 +166,19 @@ Model::update()
     }
     m_time_step += 1;
 
-    if (m_time_step % 100 == 0)
-    {
-        std::string filename = "data_" + std::to_string(m_time_step) + ".txt";
-        std::ofstream ofs(filename, std::ios::app);
-        if (!ofs) {
-            throw std::runtime_error("Cannot open file " + filename + " for writing.");
-        }
-        for (const auto &entry : m_fire_front) {
-            // Se escribe el índice y la intensidad (convertida a entero para legibilidad)
-            ofs << entry.first << " " << static_cast<int>(entry.second) << "\n";
-        }
-        ofs.close();
-    }
+    // if (m_time_step % 100 == 0)
+    // {
+    //     std::string filename = "data_" + std::to_string(m_time_step) + ".txt";
+    //     std::ofstream ofs(filename, std::ios::app);
+    //     if (!ofs) {
+    //         throw std::runtime_error("Cannot open file " + filename + " for writing.");
+    //     }
+    //     for (const auto &entry : m_fire_front) {
+    //         // Se escribe el índice y la intensidad (convertida a entero para legibilidad)
+    //         ofs << entry.first << " " << static_cast<int>(entry.second) << "\n";
+    //     }
+    //     ofs.close();
+    // }
     return !m_fire_front.empty();
 }
 // ====================================================================================================================

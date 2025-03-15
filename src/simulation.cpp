@@ -224,8 +224,10 @@ int main( int nargs, char* args[] )
         SDL_Event event;
         while(continuer) {
             // Recibimos los mapas enviados por el proceso simulador (rank 1)
-            MPI_Recv(global_fire_map.data(), global_fire_map.size(), MPI_UNSIGNED_CHAR, 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            MPI_Recv(global_vegetal_map.data(), global_vegetal_map.size(), MPI_UNSIGNED_CHAR, 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Request reqs[2];
+            MPI_Irecv(global_fire_map.data(), global_fire_map.size(), MPI_UNSIGNED_CHAR, 1, 0, MPI_COMM_WORLD, &reqs[0]);
+            MPI_Irecv(global_vegetal_map.data(), global_vegetal_map.size(), MPI_UNSIGNED_CHAR, 1, 1, MPI_COMM_WORLD, &reqs[1]);
+            MPI_Waitall(2, reqs, MPI_STATUSES_IGNORE);
             // Actualizamos la visualización
             displayer->update(global_vegetal_map, global_fire_map);
             // Chequeamos si el usuario cierra la ventana
@@ -234,7 +236,9 @@ int main( int nargs, char* args[] )
             }
             // Enviamos el flag de continuación al proceso de simulación
             int flag = continuer ? 1 : 0;
-            MPI_Send(&flag, 1, MPI_INT, 1, 2, MPI_COMM_WORLD);
+            MPI_Request req_flag;
+            MPI_Isend(&flag, 1, MPI_INT, 1, 2, MPI_COMM_WORLD, &req_flag);
+            MPI_Wait(&req_flag, MPI_STATUS_IGNORE);
         }
     }
     // Proceso de simulación: rank 1 (únicamente este hace update())
@@ -245,11 +249,19 @@ int main( int nargs, char* args[] )
             if ((simu.time_step() & 31) == 0) 
                 std::cout << "Time step " << simu.time_step() << "\n===============" << std::endl;
             // Enviamos el estado actual de los mapas al proceso de visualización
-            MPI_Send(simu.fire_map().data(), simu.fire_map().size(), MPI_UNSIGNED_CHAR, 0, 0, MPI_COMM_WORLD);
-            MPI_Send(simu.vegetal_map().data(), simu.vegetal_map().size(), MPI_UNSIGNED_CHAR, 0, 1, MPI_COMM_WORLD);
+
+            std::vector<std::uint8_t> tmp_fire = simu.fire_map();
+            std::vector<std::uint8_t> tmp_vegetal = simu.vegetal_map();
+            MPI_Request reqs[2];
+
+            MPI_Isend(tmp_fire.data(), tmp_fire.size(), MPI_UNSIGNED_CHAR, 0, 0, MPI_COMM_WORLD, &reqs[0]);
+            MPI_Isend(tmp_vegetal.data(), tmp_vegetal.size(), MPI_UNSIGNED_CHAR, 0, 1, MPI_COMM_WORLD, &reqs[1]);
+            MPI_Waitall(2, reqs, MPI_STATUSES_IGNORE);
             // Esperamos el flag de continuación desde el visualizador
             int flag = 0;
-            MPI_Recv(&flag, 1, MPI_INT, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Request req_flag;
+            MPI_Irecv(&flag, 1, MPI_INT, 0, 2, MPI_COMM_WORLD, &req_flag);
+            MPI_Wait(&req_flag, MPI_STATUS_IGNORE);
             continuer = (flag != 0);
         }
     }
