@@ -217,38 +217,36 @@ int main( int nargs, char* args[] )
 
     if(rank == 0) {
         auto displayer = Displayer::init_instance(params.discretization, params.discretization);
-        // Buffers para recibir los mapas (asumimos que fire_map y vegetal_map tienen tamaño discretization²)
+
         std::vector<std::uint8_t> global_fire_map(params.discretization * params.discretization);
         std::vector<std::uint8_t> global_vegetal_map(params.discretization * params.discretization);
         bool continuer = true;
         SDL_Event event;
         while(continuer) {
-            // Recibimos los mapas enviados por el proceso simulador (rank 1)
             MPI_Request reqs[2];
             MPI_Irecv(global_fire_map.data(), global_fire_map.size(), MPI_UNSIGNED_CHAR, 1, 0, MPI_COMM_WORLD, &reqs[0]);
             MPI_Irecv(global_vegetal_map.data(), global_vegetal_map.size(), MPI_UNSIGNED_CHAR, 1, 1, MPI_COMM_WORLD, &reqs[1]);
             MPI_Waitall(2, reqs, MPI_STATUSES_IGNORE);
-            // Actualizamos la visualización
+
             displayer->update(global_vegetal_map, global_fire_map);
-            // Chequeamos si el usuario cierra la ventana
+
             if(SDL_PollEvent(&event) && event.type == SDL_QUIT) {
                 continuer = false;
             }
-            // Enviamos el flag de continuación al proceso de simulación
             int flag = continuer ? 1 : 0;
             MPI_Request req_flag;
             MPI_Isend(&flag, 1, MPI_INT, 1, 2, MPI_COMM_WORLD, &req_flag);
             MPI_Wait(&req_flag, MPI_STATUS_IGNORE);
         }
     }
-    // Proceso de simulación: rank 1 (únicamente este hace update())
+
     else if(rank == 1) {
         auto simu = Model(params.length, params.discretization, params.wind, params.start);
         bool continuer = true;
         while(continuer && simu.update()) {
             if ((simu.time_step() & 31) == 0) 
                 std::cout << "Time step " << simu.time_step() << "\n===============" << std::endl;
-            // Enviamos el estado actual de los mapas al proceso de visualización
+
 
             std::vector<std::uint8_t> tmp_fire = simu.fire_map();
             std::vector<std::uint8_t> tmp_vegetal = simu.vegetal_map();
@@ -257,7 +255,7 @@ int main( int nargs, char* args[] )
             MPI_Isend(tmp_fire.data(), tmp_fire.size(), MPI_UNSIGNED_CHAR, 0, 0, MPI_COMM_WORLD, &reqs[0]);
             MPI_Isend(tmp_vegetal.data(), tmp_vegetal.size(), MPI_UNSIGNED_CHAR, 0, 1, MPI_COMM_WORLD, &reqs[1]);
             MPI_Waitall(2, reqs, MPI_STATUSES_IGNORE);
-            // Esperamos el flag de continuación desde el visualizador
+
             int flag = 0;
             MPI_Request req_flag;
             MPI_Irecv(&flag, 1, MPI_INT, 0, 2, MPI_COMM_WORLD, &req_flag);
