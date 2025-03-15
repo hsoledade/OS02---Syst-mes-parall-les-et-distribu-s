@@ -25,7 +25,7 @@ public:
     Model& operator = ( Model const & ) = delete;
     Model& operator = ( Model      && ) = delete;
 
-    bool update();
+    bool update_local(unsigned int start_row,unsigned int end_row);
 
     unsigned geometry() const { return m_geometry; }
     std::vector<std::uint8_t> vegetal_map() const { return m_vegetation_map; }

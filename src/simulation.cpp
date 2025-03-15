@@ -4,11 +4,14 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
-
 #include <mpi.h>
 
 #include "model.hpp"
 #include "display.hpp"
+
+
+// Funciones auxiliares: analyze_arg, parse_arguments, check_params y display_params
+// (Se mantienen iguales a tu versión original)
 
 using namespace std::string_literals;
 using namespace std::chrono_literals;
@@ -194,77 +197,100 @@ void display_params(ParamsType const& params)
               << "\tPosition initiale du foyer (col, ligne) : " << params.start.column << ", " << params.start.row << std::endl;
 }
 
-int main( int nargs, char* args[] )
+int main(int nargs, char* args[])
 {
-
     MPI_Init(&nargs, &args);
-    int rank , size;
+    int rank, size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-    if (size < 2)
-    {
-        std::cerr << "Le nombre de processus doit être au moins 2" << std::endl;
+    auto params = parse_arguments(nargs-1, &args[1]);
+    display_params(params);
+    if (!check_params(params)) {
         MPI_Finalize();
         return EXIT_FAILURE;
     }
 
-    // auto start = std::chrono::high_resolution_clock::now();
+    // Calcula las filas asignadas a cada proceso
+    int rows_per_process = params.discretization / size;
+    int extra_rows = params.discretization % size;
+    int start_row = rank * rows_per_process + std::min(rank, extra_rows);
+    int end_row = start_row + rows_per_process + (rank < extra_rows ? 1 : 0);
 
-    auto params = parse_arguments(nargs-1, &args[1]);
-    display_params(params);
-    if (!check_params(params)) return EXIT_FAILURE;
+    // Cada proceso crea su instancia de la simulación
+    auto simu = Model(params.length, params.discretization, params.wind, params.start);
 
-    if(rank == 0) {
-        auto displayer = Displayer::init_instance(params.discretization, params.discretization);
-        // Buffers para recibir los mapas (asumimos que fire_map y vegetal_map tienen tamaño discretization²)
-        std::vector<std::uint8_t> global_fire_map(params.discretization * params.discretization);
-        std::vector<std::uint8_t> global_vegetal_map(params.discretization * params.discretization);
-        bool continuer = true;
-        SDL_Event event;
-        while(continuer) {
-            // Recibimos los mapas enviados por el proceso simulador (rank 1)
-            MPI_Request reqs[2];
-            MPI_Irecv(global_fire_map.data(), global_fire_map.size(), MPI_UNSIGNED_CHAR, 1, 0, MPI_COMM_WORLD, &reqs[0]);
-            MPI_Irecv(global_vegetal_map.data(), global_vegetal_map.size(), MPI_UNSIGNED_CHAR, 1, 1, MPI_COMM_WORLD, &reqs[1]);
-            MPI_Waitall(2, reqs, MPI_STATUSES_IGNORE);
-            // Actualizamos la visualización
+    std::vector<std::uint8_t> global_fire_map(params.discretization * params.discretization, 0);
+    std::vector<std::uint8_t> global_vegetal_map(params.discretization * params.discretization, 255);
+
+
+    // En el maestro (rank 0) se preparan los arreglos para recibir la información de cada proceso
+    std::vector<int> recv_counts, displs;
+    std::shared_ptr<Displayer> displayer;
+    if (rank == 0) {
+        recv_counts.resize(size);
+        displs.resize(size);
+        for (int i = 0; i < size; i++) {
+            int proc_start = i * rows_per_process + std::min(i, extra_rows);
+            int proc_end = proc_start + rows_per_process + (i < extra_rows ? 1 : 0);
+            recv_counts[i] = (proc_end - proc_start) * params.discretization;
+            displs[i] = proc_start * params.discretization;
+        }
+        global_fire_map.resize(params.discretization * params.discretization, 0);
+        global_vegetal_map.resize(params.discretization * params.discretization, 255);
+        displayer = Displayer::init_instance(params.discretization, params.discretization);
+    }
+
+    bool local_continue = true;
+    bool global_continue = true;
+    while (global_continue) {
+        // Cada proceso actualiza su parte de la simulación
+        local_continue = simu.update_local(start_row, end_row);
+
+        // Se realiza un Allreduce lógico para determinar si algún proceso sigue activo
+        int local_flag = local_continue ? 1 : 0;
+        int global_flag = 0;
+        MPI_Allreduce(&local_flag, &global_flag, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
+        global_continue = (global_flag != 0);
+
+        // Cada proceso envía únicamente las filas actualizadas de sus mapas usando MPI_Gatherv.
+        int local_size = (end_row - start_row) * params.discretization;
+        MPI_Gatherv(simu.fire_map().data() + start_row * params.discretization,
+                    local_size, MPI_UNSIGNED_CHAR,
+                    rank == 0 ? global_fire_map.data() : nullptr,
+                    rank == 0 ? recv_counts.data() : nullptr,
+                    rank == 0 ? displs.data() : nullptr,
+                    MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
+
+        MPI_Gatherv(simu.vegetal_map().data() + start_row * params.discretization,
+                    local_size, MPI_UNSIGNED_CHAR,
+                    rank == 0 ? global_vegetal_map.data() : nullptr,
+                    rank == 0 ? recv_counts.data() : nullptr,
+                    rank == 0 ? displs.data() : nullptr,
+                    MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
+
+        // El maestro actualiza el display con el mapa global reconstruido
+        if (rank == 0) {
             displayer->update(global_vegetal_map, global_fire_map);
-            // Chequeamos si el usuario cierra la ventana
-            if(SDL_PollEvent(&event) && event.type == SDL_QUIT) {
-                continuer = false;
-            }
-            // Enviamos el flag de continuación al proceso de simulación
-            int flag = continuer ? 1 : 0;
-            MPI_Request req_flag;
-            MPI_Isend(&flag, 1, MPI_INT, 1, 2, MPI_COMM_WORLD, &req_flag);
-            MPI_Wait(&req_flag, MPI_STATUS_IGNORE);
-        }
-    }
-    // Proceso de simulación: rank 1 (únicamente este hace update())
-    else if(rank == 1) {
-        auto simu = Model(params.length, params.discretization, params.wind, params.start);
-        bool continuer = true;
-        while(continuer && simu.update()) {
-            if ((simu.time_step() & 31) == 0) 
+            if ((simu.time_step() & 31) == 0)
                 std::cout << "Time step " << simu.time_step() << "\n===============" << std::endl;
-            // Enviamos el estado actual de los mapas al proceso de visualización
 
-            std::vector<std::uint8_t> tmp_fire = simu.fire_map();
-            std::vector<std::uint8_t> tmp_vegetal = simu.vegetal_map();
-            MPI_Request reqs[2];
-
-            MPI_Isend(tmp_fire.data(), tmp_fire.size(), MPI_UNSIGNED_CHAR, 0, 0, MPI_COMM_WORLD, &reqs[0]);
-            MPI_Isend(tmp_vegetal.data(), tmp_vegetal.size(), MPI_UNSIGNED_CHAR, 0, 1, MPI_COMM_WORLD, &reqs[1]);
-            MPI_Waitall(2, reqs, MPI_STATUSES_IGNORE);
-            // Esperamos el flag de continuación desde el visualizador
-            int flag = 0;
-            MPI_Request req_flag;
-            MPI_Irecv(&flag, 1, MPI_INT, 0, 2, MPI_COMM_WORLD, &req_flag);
-            MPI_Wait(&req_flag, MPI_STATUS_IGNORE);
-            continuer = (flag != 0);
+            SDL_Event event;
+            if (SDL_PollEvent(&event) && event.type == SDL_QUIT) {
+                global_continue = false;
+            }
         }
+        MPI_Bcast(global_fire_map.data(), global_fire_map.size(), MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
+        MPI_Bcast(global_vegetal_map.data(), global_vegetal_map.size(), MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
+
+        // Cada proceso actualiza su estado local con el estado global recién recibido.
+        std::copy(global_fire_map.begin(), global_fire_map.end(), simu.fire_map().begin());
+        std::copy(global_vegetal_map.begin(), global_vegetal_map.end(), simu.vegetal_map().begin());
+
+        // Se sincronizan todos los procesos antes de la siguiente iteración
+        MPI_Barrier(MPI_COMM_WORLD);
     }
+
     MPI_Finalize();
     return EXIT_SUCCESS;
 }

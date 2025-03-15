@@ -74,7 +74,7 @@ Model::Model( double t_length, unsigned t_discretization, std::array<double,2> t
 }
 // --------------------------------------------------------------------------------------------------------------------
 bool 
-Model::update()
+Model::update_local(unsigned int start_row,unsigned int end_row)
 {
     //schedul
     auto next_front = m_fire_front;
@@ -82,6 +82,8 @@ Model::update()
     {
         // Récupération de la coordonnée lexicographique de la case en feu :
         LexicoIndices coord = get_lexicographic_from_index(f.first);
+        if (coord.row < start_row || coord.row >= end_row)
+            continue;
         // Et de la puissance du foyer
         double        power = log_factor(f.second);
 
