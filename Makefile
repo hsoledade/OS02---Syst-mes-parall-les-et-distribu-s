@@ -6,7 +6,6 @@ include inc/Make_linux.inc
 MPICXX = mpic++
 CXX = $(MPICXX)
 
-
 # Definição das flags do compilador
 CXXFLAGS = -std=c++17 -Wall -Iinc -I/usr/lib/x86_64-linux-gnu/openmpi/include/
 ifdef DEBUG
@@ -14,7 +13,6 @@ CXXFLAGS += -g -O0 -fbounds-check -pedantic -D_GLIBCXX_DEBUG -fsanitize=address
 else
 CXXFLAGS += -O3 -march=native
 endif
-
 
 LIBS = -lSDL2 -lmpi
 
@@ -54,11 +52,12 @@ $(OBJ_DIR)/simulation.o: $(SRC_DIR)/simulation.cpp $(INC_DIR)/model.hpp $(INC_DI
 
 # Linkagem final do executável
 simulation.exe: $(OBJ_FILES)
-	$(CXX) $(CXXFLAGS) $^ -o $@ $(LIBS)	
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LIBS)
 
-# Limpeza dos arquivos gerados
+# Limpeza dos arquivos .o, executáveis e arquivos temporários
+# (MAS sem apagar conteúdo de Resultats/)
 clean:
-	@rm -fr $(OBJ_DIR)/*.o $(RESULTS_DIR)/* *.exe *~ *.txt
+	@rm -f $(OBJ_DIR)/*.o *.exe *~ *.txt
 
 # Exibir ajuda
 help:
