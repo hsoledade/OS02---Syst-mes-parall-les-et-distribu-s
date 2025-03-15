@@ -6,6 +6,7 @@
 #include <thread>
 #include <chrono>
 #include <ctime>  // Para obter data e hora
+#include <omp.h>  // Biblioteca para OpenMP
 
 #include "model.hpp"
 #include "display.hpp"
@@ -243,9 +244,12 @@ int main( int nargs, char* args[] )
 {
     // Parsear argumentos
     auto params = parse_arguments(nargs - 1, &args[1]);
+
+    // Definir número de threads para OpenMP
+    omp_set_num_threads(params.num_threads);
     
     // Gerar nome do arquivo CSV com tamanho da grid, número de threads e data/hora
-    std::string filename = "Resultats/Sequentiel/n" + std::to_string(params.discretization) + "_t" + std::to_string(params.num_threads) + "_sequentiel" + ".csv";
+    std::string filename = "Resultats/Amdahl/n" + std::to_string(params.discretization) + "_t" + std::to_string(params.num_threads) + "_Amdahl" + ".csv";
     
     // Criar arquivo CSV
     std::ofstream csvFile(filename);

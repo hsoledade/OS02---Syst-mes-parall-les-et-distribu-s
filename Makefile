@@ -55,7 +55,6 @@ simulation.exe: $(OBJ_FILES)
 # Limpeza dos arquivos gerados
 clean:
 	@rm -fr $(OBJ_DIR)/*.o 
-	@rm -f $(SEQUENTIEL_DIR)/*.csv $(AMDAHL_DIR)/*.csv $(GUSTAFSON_DIR)/*.csv  # Remove arquivos CSV sem deletar as pastas
 	@rm -f $(RESULTS_DIR)/*.txt $(RESULTS_DIR)/*.log # Remove arquivos de texto, logs, mas mantém as pastas
 	@rm -f *.exe *~
 
